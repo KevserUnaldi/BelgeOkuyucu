@@ -1,0 +1,389 @@
+import sys
+import cv2
+import numpy as np
+import pytesseract
+import easyocr
+import os
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
+                           QHBoxLayout, QWidget, QFileDialog, QLabel, QTextEdit, QScrollArea)
+from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtCore import Qt
+
+os.environ['QT_MAC_WANTS_LAYER'] = '1'
+
+class BelgeOkuyucu(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Belge Okuyucu")
+        self.setGeometry(100, 100, 1200, 800)
+        
+        # Ana widget ve layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QVBoxLayout(main_widget)
+        
+        # Üst kısım - Butonlar
+        top_layout = QHBoxLayout()
+        self.klasor_sec_btn = QPushButton("Klasör Seç")
+        self.tara_btn = QPushButton("TARA")
+        self.klasor_yolu_label = QLabel("Seçilen klasör: ")
+        
+        top_layout.addWidget(self.klasor_sec_btn)
+        top_layout.addWidget(self.tara_btn)
+        top_layout.addWidget(self.klasor_yolu_label)
+        top_layout.addStretch()
+        
+        # Orta kısım - Görüntü ve metin
+        middle_layout = QHBoxLayout()
+        
+        # Sol taraf - Görüntü gösterimi ve navigasyon butonları
+        left_layout = QVBoxLayout()
+        
+        # Görüntü gösterimi
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_scroll = QScrollArea()
+        self.image_scroll.setWidget(self.image_label)
+        self.image_scroll.setWidgetResizable(True)
+        
+        # Navigasyon butonları
+        nav_layout = QHBoxLayout()
+        self.prev_btn = QPushButton("Önceki")
+        self.next_btn = QPushButton("Sonraki")
+        self.image_counter_label = QLabel("0/0")
+        
+        nav_layout.addWidget(self.prev_btn)
+        nav_layout.addWidget(self.image_counter_label)
+        nav_layout.addWidget(self.next_btn)
+        
+        left_layout.addWidget(self.image_scroll)
+        left_layout.addLayout(nav_layout)
+        
+        # Sağ taraf - Metin gösterimi
+        self.text_edit = QTextEdit()
+        self.text_edit.setReadOnly(True)
+        
+        middle_layout.addLayout(left_layout, 2)
+        middle_layout.addWidget(self.text_edit, 1)
+        
+        # Layout'ları ana layout'a ekle
+        layout.addLayout(top_layout)
+        layout.addLayout(middle_layout)
+        
+        # Buton bağlantıları
+        self.klasor_sec_btn.clicked.connect(self.klasor_sec)
+        self.tara_btn.clicked.connect(self.tara)
+        self.prev_btn.clicked.connect(self.show_previous_image)
+        self.next_btn.clicked.connect(self.show_next_image)
+        
+        # Değişkenler
+        self.secilen_klasor = ""
+        pytesseract.pytesseract.tesseract_cmd = '/opt/homebrew/bin/tesseract'
+        
+        # Görüntü listesi ve mevcut görüntü indeksi
+        self.detected_images = []  # [(image_path, text, processed_image), ...]
+        self.current_image_index = -1
+        
+        # Başlangıçta navigasyon butonlarını devre dışı bırak
+        self.update_nav_buttons()
+
+    def klasor_sec(self):
+        dialog = QFileDialog()
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        
+        if dialog.exec_():
+            self.secilen_klasor = dialog.selectedFiles()[0]
+            self.klasor_yolu_label.setText(f"Seçilen klasör: {self.secilen_klasor}")
+            
+            # Seçilen klasördeki dosya sayısını göster
+            supported_extensions = ('.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG')
+            file_count = sum(1 for root, _, files in os.walk(self.secilen_klasor) 
+                            if "SONUCLAR" not in root
+                            for f in files if f.endswith(supported_extensions))
+            
+            self.text_edit.setText(f"Seçilen klasörde {file_count} adet görüntü dosyası bulundu.")
+
+    def detect_id_documents(self, image_path):
+        # Görüntüyü oku
+        image = cv2.imread(image_path)
+        if image is None:
+            return False
+        
+        # Görüntüyü yeniden boyutlandır
+        max_width = 3000  # Daha da arttırıldı
+        height, width = image.shape[:2]
+        if width > max_width:
+            scale = max_width / width
+            image = cv2.resize(image, None, fx=scale, fy=scale)
+        
+        # Gelişmiş görüntü işleme
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Birden fazla ön işleme yöntemi uygula
+        preprocessed_images = []
+        
+        # 1. Normal gri görüntü
+        preprocessed_images.append(gray)
+        
+        # 2. Kontrast artırılmış görüntü
+        contrast1 = cv2.convertScaleAbs(gray, alpha=1.3, beta=30)
+        preprocessed_images.append(contrast1)
+        
+        # 3. Daha yüksek kontrast
+        contrast2 = cv2.convertScaleAbs(gray, alpha=1.5, beta=40)
+        preprocessed_images.append(contrast2)
+        
+        # 4. Adaptif eşikleme
+        adaptive = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                       cv2.THRESH_BINARY, 11, 2)
+        preprocessed_images.append(adaptive)
+        
+        # 5. Gürültü azaltma
+        denoised = cv2.fastNlMeansDenoising(gray)
+        preprocessed_images.append(denoised)
+        
+        # 6. Keskinleştirme
+        kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+        sharpened = cv2.filter2D(gray, -1, kernel)
+        preprocessed_images.append(sharpened)
+        
+        # Belge türleri ve anahtar kelimeleri (genişletildi)
+        document_types = {
+            'Kimlik': [
+                'T.C.', 'TC', 'KİMLİK', 'NÜFUS', 'CÜZDANı', 'REPUBLIC', 'TÜRKİYE',
+                'SOYADI', 'ADI', 'DOGUM', 'DOĞUM', 'SERİ', 'ANNE', 'BABA', 'KAN',
+                'GRUBU', 'SURNAME', 'NAME', 'IDENTITY', 'CARD', 'CUMHURİYETİ'
+            ],
+            'Ehliyet': [
+                'SÜRÜCÜ', 'BELGESİ', 'DRIVER', 'LICENSE', 'DRIVING', 'SINIFI',
+                'CLASS', 'LICENCE', 'MOTORLU', 'TAŞIT', 'GEÇERLİLİK', 'TARİHİ',
+                'PERMIS', 'CONDUIRE', 'DRİVİNG', 'VEHICLE'
+            ],
+            'Pasaport': [
+                'PASSPORT', 'PASAPORT', 'REPUBLIC OF TURKEY', 'TÜRKİYE CUMHURİYETİ',
+                'NATIONALITY', 'UYRUK', 'P<TUR', 'VALID', 'GEÇERLİLİK', 'SURNAME',
+                'GIVEN NAME', 'DATE OF BIRTH', 'PASSEPORT', 'TYPE', 'CODE', 'HOLDER',
+                'PLACE OF BIRTH', 'AUTHORITY'
+            ],
+            'Ruhsat': [
+                'ARAÇ', 'RUHSAT', 'TESCIL', 'TESCİL', 'VEHICLE', 'REGISTRATION',
+                'PLAKA', 'MOTOR', 'ŞASİ', 'MARKA', 'MODEL', 'SİLİNDİR', 'RENK',
+                'CİNSİ', 'NET AĞIRLIK', 'KOLTUK', 'LASTİK', 'YAKIT'
+            ]
+        }
+        
+        detected = False
+        best_match = {'confidence': 0, 'data': None}
+        
+        # Tüm görüntü üzerinde OCR dene
+        try:
+            full_text = pytesseract.image_to_string(gray, lang='tur+eng')
+            reader = easyocr.Reader(['tr', 'en'])
+            easy_results = reader.readtext(gray)
+            full_text += ' ' + ' '.join([res[1] for res in easy_results])
+            
+            # Belge türünü tespit et
+            for doc_type, keywords in document_types.items():
+                found_keywords = []
+                for keyword in keywords:
+                    if keyword.lower() in full_text.lower():
+                        found_keywords.append(keyword)
+                
+                if len(found_keywords) >= 1:  # En az 1 anahtar kelime yeterli
+                    marked_image = image.copy()
+                    full_text_info = f"Tespit Edilen Belge Türü: {doc_type}\n\n"
+                    full_text_info += f"OCR sonucu:\n{full_text}\n\n"
+                    full_text_info += f"Bulunan anahtar kelimeler: {', '.join(found_keywords)}"
+                    
+                    best_match = {
+                        'confidence': len(found_keywords),
+                        'data': (image_path, full_text_info, marked_image, doc_type)
+                    }
+                    detected = True
+                    break
+        except Exception as e:
+            print(f"Tam görüntü OCR hatası: {str(e)}")
+        
+        # Eğer tam görüntüde tespit yapılamadıysa, bölgelere ayırarak dene
+        if not detected:
+            for processed_img in preprocessed_images:
+                # Farklı Canny parametreleri
+                edges_list = [
+                    cv2.Canny(processed_img, 30, 150),
+                    cv2.Canny(processed_img, 50, 150),
+                    cv2.Canny(processed_img, 70, 200)
+                ]
+                
+                for edges in edges_list:
+                    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, 
+                                                 cv2.CHAIN_APPROX_SIMPLE)
+                    
+                    image_area = image.shape[0] * image.shape[1]
+                    
+                    for contour in contours:
+                        area = cv2.contourArea(contour)
+                        if area < image_area * 0.01:  # Minimum alan eşiği daha da düşürüldü
+                            continue
+                            
+                        x, y, w, h = cv2.boundingRect(contour)
+                        aspect_ratio = float(w)/h
+                        
+                        if 0.5 <= aspect_ratio <= 3.5:  # Oran aralığı daha da genişletildi
+                            roi = processed_img[y:y+h, x:x+w]
+                            
+                            try:
+                                text = pytesseract.image_to_string(roi, lang='tur+eng')
+                                easy_results = reader.readtext(roi)
+                                text += ' ' + ' '.join([res[1] for res in easy_results])
+                                
+                                for doc_type, keywords in document_types.items():
+                                    found_keywords = []
+                                    for keyword in keywords:
+                                        if keyword.lower() in text.lower():
+                                            found_keywords.append(keyword)
+                                    
+                                    if len(found_keywords) >= 1 and len(found_keywords) > best_match['confidence']:
+                                        marked_image = image.copy()
+                                        cv2.rectangle(marked_image, (x,y), (x+w,y+h), (0,255,0), 2)
+                                        cv2.putText(marked_image, f"{doc_type}", (x, y-10), 
+                                                  cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,255,0), 2)
+                                        
+                                        full_text = f"Tespit Edilen Belge Türü: {doc_type}\n\n"
+                                        full_text += f"OCR sonucu:\n{text}\n\n"
+                                        full_text += f"Bulunan anahtar kelimeler: {', '.join(found_keywords)}"
+                                        
+                                        best_match = {
+                                            'confidence': len(found_keywords),
+                                            'data': (image_path, full_text, marked_image, doc_type)
+                                        }
+                                        detected = True
+                                        
+                            except Exception as e:
+                                print(f"ROI OCR hatası: {str(e)}")
+                                continue
+        
+        if detected:
+            image_path, full_text, marked_image, doc_type = best_match['data']
+            
+            # Aynı dosya daha önce tespit edildi mi kontrol et
+            for existing_img in self.detected_images:
+                if image_path == existing_img[0]:
+                    return detected
+            
+            # Yeni tespit ise ekle
+            output_path = os.path.join(self.sonuclar_klasoru, 
+                f'{doc_type}_{os.path.basename(image_path)}')
+            cv2.imwrite(output_path, marked_image)
+            self.detected_images.append((image_path, full_text, marked_image))
+        
+        return detected
+
+    def tara(self):
+        if not self.secilen_klasor:
+            self.text_edit.setText("Lütfen önce bir klasör seçin!")
+            return
+            
+        # Sonuçlar klasörünü oluştur
+        self.sonuclar_klasoru = os.path.join(self.secilen_klasor, "SONUCLAR")
+        if not os.path.exists(self.sonuclar_klasoru):
+            os.makedirs(self.sonuclar_klasoru)
+        
+        # Önceki sonuçları temizle
+        self.detected_images.clear()
+        self.current_image_index = -1
+        self.text_edit.clear()
+        
+        # İşlenen dosyaları takip et
+        processed_files = set()  # Tekrarları önlemek için set kullan
+        supported_extensions = ('.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG')
+        
+        total_files = 0
+        detected_count = 0
+        
+        for root, dirs, files in os.walk(self.secilen_klasor):
+            # SONUCLAR klasörünü ve gizli klasörleri atla
+            if "SONUCLAR" in root or root.startswith('.'):
+                continue
+            
+            for filename in files:
+                if filename.endswith(supported_extensions):
+                    image_path = os.path.join(root, filename)
+                    
+                    # Dosya daha önce işlendiyse atla
+                    if image_path in processed_files:
+                        continue
+                    
+                    total_files += 1
+                    self.text_edit.append(f"\n--- İşlenen dosya: {filename} ---")
+                    
+                    try:
+                        if self.detect_id_documents(image_path):
+                            detected_count += 1
+                            processed_files.add(image_path)  # İşlenen dosyayı kaydet
+                        else:
+                            self.text_edit.append("Bu görüntüde belge tespit edilemedi!")
+                    except Exception as e:
+                        self.text_edit.append(f"Hata: {str(e)}")
+        
+        # Sonuçları göster
+        self.text_edit.append(f"\nTarama tamamlandı!")
+        self.text_edit.append(f"Toplam taranan dosya: {total_files}")
+        self.text_edit.append(f"Tespit edilen belge: {detected_count}")
+        self.text_edit.append(f"Benzersiz tespit: {len(self.detected_images)}")
+        
+        # Tekrarlanan görüntüleri kaldır (image_path'e göre)
+        seen_paths = set()
+        unique_images = []
+        for img in self.detected_images:
+            if img[0] not in seen_paths:  # image_path kontrolü
+                seen_paths.add(img[0])
+                unique_images.append(img)
+        self.detected_images = unique_images
+        
+        # İlk görüntüyü göster
+        if self.detected_images:
+            self.current_image_index = 0
+            self.show_current_image()
+        
+        # Navigasyon butonlarını güncelle
+        self.update_nav_buttons()
+
+    def show_current_image(self):
+        if 0 <= self.current_image_index < len(self.detected_images):
+            _, text, image = self.detected_images[self.current_image_index]
+            self.show_image(image)
+            self.text_edit.setText(text)
+            self.image_counter_label.setText(f"{self.current_image_index + 1}/{len(self.detected_images)}")
+
+    def show_previous_image(self):
+        if self.current_image_index > 0:
+            self.current_image_index -= 1
+            self.show_current_image()
+            self.update_nav_buttons()
+
+    def show_next_image(self):
+        if self.current_image_index < len(self.detected_images) - 1:
+            self.current_image_index += 1
+            self.show_current_image()
+            self.update_nav_buttons()
+
+    def update_nav_buttons(self):
+        self.prev_btn.setEnabled(self.current_image_index > 0)
+        self.next_btn.setEnabled(self.current_image_index < len(self.detected_images) - 1)
+
+    def show_image(self, cv_img):
+        height, width, channel = cv_img.shape
+        bytes_per_line = 3 * width
+        rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+        qt_image = QImage(rgb_image.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        
+        scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
+            self.image_scroll.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.image_label.setPixmap(scaled_pixmap)
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    window = BelgeOkuyucu()
+    window.show()
+    sys.exit(app.exec_())
