@@ -1,6 +1,6 @@
 # BelgeOkuyucu - Kimlik/Ehliyet/Pasaport/İkamet gibi belgeleri otomatik tespit ve OCR
 
-Bu proje, seçtiğiniz bir klasör içindeki `.jpg`, `.jpeg` ve `.png` uzantılı görselleri tarayarak; **kimlik, ehliyet, pasaport, ikamet** gibi belirli belge türlerini algılar, üzerlerindeki metinleri **OCR** (Optik Karakter Tanıma) yöntemiyle okur ve ilgili bilgileri (TC Kimlik No, Ad Soyad, Doğum Tarihi vb.) çıkarmayı hedefler. Ayrıca, tespit ettiği belgelerin kopyalarını üzerine “belge türü” etiketi basarak ayrı bir **SONUÇLAR** klasörüne kaydeder. 
+Bu proje, seçtiğiniz bir klasör içindeki `.jpg`, `.jpeg` ve `.png` uzantılı görselleri tarayarak; **kimlik, ehliyet, pasaport ** gibi belirli belge türlerini algılar, üzerlerindeki metinleri **OCR** (Optik Karakter Tanıma) yöntemiyle okur ve ilgili bilgileri (TC Kimlik No, Ad Soyad, Doğum Tarihi vb.) çıkarmayı hedefler. Ayrıca, tespit ettiği belgelerin kopyalarını üzerine “belge türü” etiketi basarak ayrı bir **SONUÇLAR** klasörüne kaydeder. 
 
 ## İçindekiler
 - [Özellikler](#özellikler)
@@ -22,7 +22,7 @@ Bu proje, seçtiğiniz bir klasör içindeki `.jpg`, `.jpeg` ve `.png` uzantıl�
 - **Kolay kullanım**: Sürükle-bırak tarzı bir klasör seçimiyle içerikteki görüntüleri otomatik olarak işler.
 - **Toplu tarama**: Seçilen klasör ve alt klasörlerdeki tüm `.jpg`, `.jpeg`, `.png` dosyaları aranır.
 - **Türkçe ve İngilizce** destekli OCR: `pytesseract` ve `easyocr` ile çoklu denemeler yaparak doğruluk oranını artırır.
-- **Belge türü tespiti**: Kimlik, ehliyet, pasaport ve ikamet gibi belgeleri anahtar kelime analiziyle otomatik saptar.
+- **Belge türü tespiti**: Kimlik, ehliyet ve pasaport gibi belgeleri anahtar kelime analiziyle otomatik saptar.
 - **Çıkarılan bilgi**: TC Kimlik No, Ad Soyad, Doğum Tarihi, Belge No, Geçerlilik Tarihi, Uyruk gibi bilgiler metinden ayrıştırılır.
 - **Raporlama**: Tespit edilen metinlerin ve çıkarılan bilgilerin düzenli bir özetini kullanıcıya gösterir.
 - **Sonuçların kaydedilmesi**: Tespit edilen belgelerin kopyaları üzerine belge türü etiketi basılarak `SONUCLAR` klasörüne kaydedilir.
